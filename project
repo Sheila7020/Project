@@ -1,0 +1,80 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# Funkcja generowania sygnałów
+def generate_signals(df, value_col, short_window=50, long_window=200):
+    df[f"SMA_{short_window}"] = df[value_col].rolling(window=short_window).mean()
+    df[f"SMA_{long_window}"] = df[value_col].rolling(window=long_window).mean()
+    df["Signal"] = np.where(df[f"SMA_{short_window}"] > df[f"SMA_{long_window}"], 1, 0)
+    return df
+
+
+# Funkcja backtestu strategii
+def backtest(df, value_col):
+    df["Daily_Return"] = df[value_col].pct_change()
+    df["Strategy_Return"] = df["Signal"].shift(1) * df["Daily_Return"]
+
+    sharpe_ratio = df["Strategy_Return"].mean() / df["Strategy_Return"].std() * np.sqrt(252) if df[
+                                                                                                    "Strategy_Return"].std() > 0 else None
+    max_drawdown = (df[value_col] / df[value_col].cummax() - 1).min()
+    win_rate = (df["Strategy_Return"] > 0).mean()
+    cagr = (1 + df["Strategy_Return"].mean()) ** 252 - 1 if df["Strategy_Return"].mean() > 0 else None
+
+    return sharpe_ratio, max_drawdown, win_rate, cagr
+
+
+# Wczytanie danych z pliku Excel
+file_name = "DANE2.xlsx"
+excel_data = pd.ExcelFile(file_name)
+
+results = []
+
+for sheet in excel_data.sheet_names:
+    print(f"\nPrzetwarzanie arkusza: {sheet}")
+    data = pd.read_excel(file_name, sheet_name=sheet)
+
+    # Określenie instrumentu w zależności od arkusza
+    if sheet == "daily":
+        instruments = ["SPY_ETF", "AAPL", "EUR/USD"]
+    elif sheet == "weekly":
+        instruments = ["Ropa_WTI"]
+    elif sheet == "monthly":
+        instruments = ["IEF_ETF"]
+
+    # Przetwarzanie każdego instrumentu
+    for instrument in instruments:
+        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+        data = data.dropna(subset=["Date", instrument]).sort_values("Date").reset_index(drop=True)
+
+        # Generowanie sygnałów i strategii
+        data = generate_signals(data, instrument)
+        sharpe_ratio, max_drawdown, win_rate, cagr = backtest(data, instrument)
+
+        # Zapis wyników
+        results.append({
+            "Dataset": sheet,
+            "Instrument": instrument,
+            "Sharpe Ratio": sharpe_ratio,
+            "Max Drawdown": max_drawdown,
+            "Win Rate": win_rate,
+            "CAGR": cagr
+        })
+
+        # Tworzenie wykresów
+        plt.figure(figsize=(12, 6))
+        plt.plot(data["Date"], data[instrument], label=f"{instrument} Price", color="blue")
+        plt.plot(data["Date"], data[f"SMA_50"], label="SMA 50", color="green")
+        plt.plot(data["Date"], data[f"SMA_200"], label="SMA 200", color="red")
+        plt.title(f"{instrument} with SMA Signals ({sheet})")
+        plt.xlabel("Date")
+        plt.ylabel("Price")
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+# Zapis wyników do pliku Excel
+results_df = pd.DataFrame(results)
+results_df.to_excel("Trend_Following_Results.xlsx", index=False)
+print("\nWyniki zapisane do 'Trend_Following_Results.xlsx'.")
